@@ -1,0 +1,31 @@
+.idea/
+.venv/
+
+# Python cache and bytecode
+__pycache__/
+*.pyc
+
+# Build and distribution artifacts
+build/
+dist/
+*.egg-info/
+
+# Test and tooling caches
+.pytest_cache/
+.mypy_cache/
+
+# Environment files – exclude real secrets, but keep the example template
+HW1/.env
+.env.local
+.env.*.local
+.env.example
+
+# Airflow local runtime artifacts
+HW1/airflow/airflow.db
+HW1/airflow/airflow.db-shm
+HW1/airflow/airflow.db-wal
+HW1/airflow/weather.db
+HW1/airflow/logs/
+HW1/airflow/simple_auth_manager_passwords.json.generated
+HW1/airflow/bootstrap/
+

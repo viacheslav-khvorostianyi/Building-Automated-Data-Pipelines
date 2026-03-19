@@ -1,0 +1,258 @@
+x-airflow-common: &airflow-common
+  # All required providers (celery, fab, postgres) are already bundled in the
+  # official 3.0.0 image — no custom build needed.
+  # To add extra packages: swap `image:` for `build: .` and edit requirements.txt
+  image: apache/airflow:3.0.0
+  environment: &airflow-common-env
+    AIRFLOW__CORE__EXECUTOR: CeleryExecutor
+    # --- Auth (FAB provider, same UX as Airflow 2.x) ---
+    AIRFLOW__CORE__AUTH_MANAGER: airflow.providers.fab.auth_manager.fab_auth_manager.FabAuthManager
+    # --- Database ---
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres/airflow
+    # --- Celery ---
+    AIRFLOW__CELERY__RESULT_BACKEND: db+postgresql://airflow:airflow@postgres/airflow
+    AIRFLOW__CELERY__BROKER_URL: redis://:@redis:6379/0
+    # --- Security (override in .env for production!) ---
+    AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW__CORE__FERNET_KEY:-}
+    AIRFLOW__WEBSERVER__SECRET_KEY: ${AIRFLOW__WEBSERVER__SECRET_KEY:-airflow_secret}
+    # JWT secret for the Execution API (Airflow 3.0).
+    # If unset, each container generates a RANDOM key → 403 Forbidden on every task.
+    # Must be the same value on api-server AND worker.
+    AIRFLOW__API_AUTH__JWT_SECRET: ${AIRFLOW__API_AUTH__JWT_SECRET:-airflow_jwt_secret}
+    # --- DAG behaviour ---
+    AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "true"
+    AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+    # --- Standalone DAG processor (Airflow 3.0) ---
+    AIRFLOW__SCHEDULER__STANDALONE_DAG_PROCESSOR: "true"
+    AIRFLOW__SCHEDULER__ENABLE_HEALTH_CHECK: "true"
+    # --- Task execution API (Airflow 3.0) ---
+    # Worker subprocesses call back to this URL to report task state & hostname.
+    # Must be the Docker Compose service name, NOT localhost.
+    AIRFLOW__CORE__EXECUTION_API_SERVER_URL: http://airflow-api-server:8080/execution/
+    # --- Optional extra pip packages at runtime ---
+    _PIP_ADDITIONAL_REQUIREMENTS: ${_PIP_ADDITIONAL_REQUIREMENTS:-}
+  volumes:
+    - ${AIRFLOW_PROJ_DIR:-.}/airflow/dags:/opt/airflow/dags
+    - ${AIRFLOW_PROJ_DIR:-.}/airflow/logs:/opt/airflow/logs
+    - ${AIRFLOW_PROJ_DIR:-.}/airflow/plugins:/opt/airflow/plugins
+    - ${AIRFLOW_PROJ_DIR:-.}/airflow/config:/opt/airflow/config
+  user: "${AIRFLOW_UID:-50000}:0"
+  depends_on: &airflow-common-depends-on
+    redis:
+      condition: service_healthy
+    postgres:
+      condition: service_healthy
+
+services:
+
+  # ── Infrastructure ────────────────────────────────────────────────────────
+
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: airflow
+      POSTGRES_DB: airflow
+    volumes:
+      - postgres-db-volume:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "airflow"]
+      interval: 10s
+      retries: 5
+      start_period: 5s
+    restart: always
+
+  redis:
+    image: redis:7.2-bookworm
+    expose:
+      - 6379
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 30s
+      retries: 50
+      start_period: 30s
+    restart: always
+
+  # ── Airflow init (runs once, then exits) ──────────────────────────────────
+
+  airflow-init:
+    <<: *airflow-common
+    entrypoint: /bin/bash
+    command:
+      - -c
+      - |
+        echo "Creating directory structure …"
+        mkdir -p /sources/airflow/{logs,dags,plugins,config}
+        chown -R "${AIRFLOW_UID}:0" /sources/airflow/{logs,dags,plugins,config}
+
+        echo "Running database migrations (Airflow 3.0: db migrate) …"
+        airflow db migrate
+
+        echo "Creating pipeline_data schema in PostgreSQL …"
+        python3 -c "
+        import psycopg2
+        conn = psycopg2.connect(host='postgres', dbname='airflow', user='airflow', password='airflow')
+        conn.autocommit = True
+        cur = conn.cursor()
+        cur.execute('CREATE SCHEMA IF NOT EXISTS pipeline_data')
+        cur.close()
+        conn.close()
+        print('Schema pipeline_data is ready.')
+        " || true
+
+        echo "Adding Airflow connections …"
+        airflow connections add 'weather_conn' \
+          --conn-type 'http' \
+          --conn-host 'https://api.openweathermap.org' \
+          --conn-schema 'https' || true
+
+        airflow connections add 'postgres_pipeline' \
+          --conn-type 'postgres' \
+          --conn-host 'postgres' \
+          --conn-port '5432' \
+          --conn-login 'airflow' \
+          --conn-password 'airflow' \
+          --conn-schema 'airflow' \
+          --conn-extra '{"options": "-c search_path=pipeline_data"}' || true
+
+        echo "Creating admin user …"
+        airflow users create \
+          --username "${_AIRFLOW_WWW_USER_USERNAME:-airflow}" \
+          --firstname "Airflow" \
+          --lastname "Admin" \
+          --role "Admin" \
+          --email "admin@example.com" \
+          --password "${_AIRFLOW_WWW_USER_PASSWORD:-airflow}" || true
+
+        echo "Airflow initialized successfully!"
+        airflow variables set WEATHER_API_KEY "${WEATHER_API_KEY:-}" || true
+    environment:
+      <<: *airflow-common-env
+      _AIRFLOW_WWW_USER_USERNAME: ${_AIRFLOW_WWW_USER_USERNAME:-airflow}
+      _AIRFLOW_WWW_USER_PASSWORD: ${_AIRFLOW_WWW_USER_PASSWORD:-airflow}
+      WEATHER_API_KEY: ${WEATHER_API_KEY:-}
+    user: "0:0"
+    volumes:
+      - ${AIRFLOW_PROJ_DIR:-.}:/sources
+
+  # ── Airflow services ──────────────────────────────────────────────────────
+
+  # Airflow 3.0: `airflow webserver` was replaced by `airflow api-server`
+  airflow-api-server:
+    <<: *airflow-common
+    command: api-server
+    ports:
+      - "8080:8080"
+    healthcheck:
+      # Airflow 3.0: health moved from /health → /api/v2/monitor/health (FastAPI)
+      test: ["CMD", "curl", "--fail", "http://localhost:8080/api/v2/monitor/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    restart: always
+    depends_on:
+      <<: *airflow-common-depends-on
+      airflow-init:
+        condition: service_completed_successfully
+
+  airflow-scheduler:
+    <<: *airflow-common
+    command: scheduler
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8974/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    restart: always
+    depends_on:
+      <<: *airflow-common-depends-on
+      airflow-init:
+        condition: service_completed_successfully
+
+  # NEW in Airflow 3.0 – standalone DAG file processor
+  airflow-dag-processor:
+    <<: *airflow-common
+    command: dag-processor
+    healthcheck:
+      test:
+        - "CMD-SHELL"
+        - 'airflow jobs check --job-type DagProcessorJob --hostname "$${HOSTNAME}"'
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    restart: always
+    depends_on:
+      <<: *airflow-common-depends-on
+      airflow-init:
+        condition: service_completed_successfully
+
+  airflow-worker:
+    <<: *airflow-common
+    # Entrypoint maps `celery worker` → `airflow celery worker` automatically.
+    # Do NOT prefix with `--app ...` — the entrypoint adds that internally.
+    command: celery worker
+    healthcheck:
+      test:
+        - "CMD-SHELL"
+        - 'celery --app airflow.providers.celery.executors.celery_executor.app inspect ping -d "celery@$${HOSTNAME}"'
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    environment:
+      <<: *airflow-common-env
+      # Required so that the worker process does not create a new session
+      DUMB_INIT_SETSID: "0"
+    restart: always
+    depends_on:
+      <<: *airflow-common-depends-on
+      airflow-init:
+        condition: service_completed_successfully
+
+  airflow-triggerer:
+    <<: *airflow-common
+    command: triggerer
+    healthcheck:
+      test:
+        - "CMD-SHELL"
+        - 'airflow jobs check --job-type TriggererJob --hostname "$${HOSTNAME}"'
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    restart: always
+    depends_on:
+      <<: *airflow-common-depends-on
+      airflow-init:
+        condition: service_completed_successfully
+
+  # ── Optional: Celery Flower (worker monitoring UI on :5555) ──────────────
+  # Start with: docker compose --profile flower up
+
+  flower:
+    <<: *airflow-common
+    # Entrypoint maps `celery flower` → `airflow celery flower` automatically.
+    command: celery flower
+    profiles:
+      - flower
+    ports:
+      - "5555:5555"
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:5555/"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    restart: always
+    depends_on:
+      <<: *airflow-common-depends-on
+      airflow-init:
+        condition: service_completed_successfully
+
+volumes:
+  postgres-db-volume:
+
