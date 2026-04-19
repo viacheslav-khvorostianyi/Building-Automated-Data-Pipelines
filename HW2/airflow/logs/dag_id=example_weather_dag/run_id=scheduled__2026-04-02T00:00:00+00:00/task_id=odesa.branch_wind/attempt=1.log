@@ -1,0 +1,8 @@
+{"timestamp":"2026-04-19T11:53:37.415475","level":"info","event":"DAG bundles loaded: dags-folder","logger":"airflow.dag_processing.bundles.manager.DagBundlesManager"}
+{"timestamp":"2026-04-19T11:53:37.424426","level":"info","event":"Filling up the DagBag from /opt/airflow/dags/example_dag.py","logger":"airflow.models.dagbag.DagBag"}
+{"timestamp":"2026-04-19T11:53:37.910897","level":"info","event":"Wind check for Odesa: 2.1 m/s (threshold 10.0 m/s)","logger":"root"}
+{"timestamp":"2026-04-19T11:53:37.911180","level":"info","event":"Done. Returned value was: odesa.normal_load","logger":"airflow.task.operators.airflow.providers.standard.decorators.branch_python._BranchPythonDecoratedOperator"}
+{"timestamp":"2026-04-19T11:53:37.911402","level":"info","event":"Branch into odesa.normal_load","logger":"airflow.task.operators.airflow.providers.standard.decorators.branch_python._BranchPythonDecoratedOperator"}
+{"timestamp":"2026-04-19T11:53:37.912429","level":"info","event":"Following branch {'odesa.normal_load'}","logger":"airflow.task.operators.airflow.providers.standard.decorators.branch_python._BranchPythonDecoratedOperator"}
+{"timestamp":"2026-04-19T11:53:37.912793","level":"info","event":"Skipping tasks [('odesa.alert_load', -1)]","logger":"airflow.task.operators.airflow.providers.standard.decorators.branch_python._BranchPythonDecoratedOperator"}
+{"timestamp":"2026-04-19T11:53:37.913263","level":"info","event":"Skipping downstream tasks.","logger":"task"}

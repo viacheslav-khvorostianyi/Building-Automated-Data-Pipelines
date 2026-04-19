@@ -1,0 +1,8 @@
+{"timestamp":"2026-04-19T11:56:57.708749","level":"info","event":"DAG bundles loaded: dags-folder","logger":"airflow.dag_processing.bundles.manager.DagBundlesManager"}
+{"timestamp":"2026-04-19T11:56:57.710499","level":"info","event":"Filling up the DagBag from /opt/airflow/dags/example_dag.py","logger":"airflow.models.dagbag.DagBag"}
+{"timestamp":"2026-04-19T11:56:58.791169","level":"info","event":"Wind check for Kharkiv: 3.1 m/s (threshold 10.0 m/s)","logger":"root"}
+{"timestamp":"2026-04-19T11:56:58.791510","level":"info","event":"Done. Returned value was: kharkiv.normal_load","logger":"airflow.task.operators.airflow.providers.standard.decorators.branch_python._BranchPythonDecoratedOperator"}
+{"timestamp":"2026-04-19T11:56:58.793429","level":"info","event":"Branch into kharkiv.normal_load","logger":"airflow.task.operators.airflow.providers.standard.decorators.branch_python._BranchPythonDecoratedOperator"}
+{"timestamp":"2026-04-19T11:56:58.795452","level":"info","event":"Following branch {'kharkiv.normal_load'}","logger":"airflow.task.operators.airflow.providers.standard.decorators.branch_python._BranchPythonDecoratedOperator"}
+{"timestamp":"2026-04-19T11:56:58.799808","level":"info","event":"Skipping tasks [('kharkiv.alert_load', -1)]","logger":"airflow.task.operators.airflow.providers.standard.decorators.branch_python._BranchPythonDecoratedOperator"}
+{"timestamp":"2026-04-19T11:56:58.802810","level":"info","event":"Skipping downstream tasks.","logger":"task"}

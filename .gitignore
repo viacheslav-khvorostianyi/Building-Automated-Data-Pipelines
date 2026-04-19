@@ -19,6 +19,7 @@ HW1/.env
 .env.local
 .env.*.local
 .env.example
+*.env
 
 # Airflow local runtime artifacts
 HW1/airflow/airflow.db
@@ -28,4 +29,15 @@ HW1/airflow/weather.db
 HW1/airflow/logs/
 HW1/airflow/simple_auth_manager_passwords.json.generated
 HW1/airflow/bootstrap/
+
+HW2/airflow
+HW2/airflow/airflow.db
+HW2/airflow/airflow.db-shm
+HW2/airflow/airflow.db-wal
+HW2/airflow/weather.db
+HW2/airflow/logs/
+HW2/airflow/simple_auth_manager_passwords.json.generated
+HW2/airflow/bootstrap/
+
+
 
