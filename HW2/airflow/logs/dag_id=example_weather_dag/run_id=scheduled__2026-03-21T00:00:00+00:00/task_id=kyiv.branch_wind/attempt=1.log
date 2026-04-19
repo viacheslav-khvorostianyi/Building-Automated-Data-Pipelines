@@ -1,0 +1,8 @@
+{"timestamp":"2026-04-19T11:52:48.121001","level":"info","event":"DAG bundles loaded: dags-folder","logger":"airflow.dag_processing.bundles.manager.DagBundlesManager"}
+{"timestamp":"2026-04-19T11:52:48.230145","level":"info","event":"Filling up the DagBag from /opt/airflow/dags/example_dag.py","logger":"airflow.models.dagbag.DagBag"}
+{"timestamp":"2026-04-19T11:52:51.071143","level":"info","event":"Wind check for Kyiv: 1.8 m/s (threshold 10.0 m/s)","logger":"root"}
+{"timestamp":"2026-04-19T11:52:51.071346","level":"info","event":"Done. Returned value was: kyiv.normal_load","logger":"airflow.task.operators.airflow.providers.standard.decorators.branch_python._BranchPythonDecoratedOperator"}
+{"timestamp":"2026-04-19T11:52:51.071518","level":"info","event":"Branch into kyiv.normal_load","logger":"airflow.task.operators.airflow.providers.standard.decorators.branch_python._BranchPythonDecoratedOperator"}
+{"timestamp":"2026-04-19T11:52:51.075240","level":"info","event":"Following branch {'kyiv.normal_load'}","logger":"airflow.task.operators.airflow.providers.standard.decorators.branch_python._BranchPythonDecoratedOperator"}
+{"timestamp":"2026-04-19T11:52:51.075566","level":"info","event":"Skipping tasks [('kyiv.alert_load', -1)]","logger":"airflow.task.operators.airflow.providers.standard.decorators.branch_python._BranchPythonDecoratedOperator"}
+{"timestamp":"2026-04-19T11:52:51.075929","level":"info","event":"Skipping downstream tasks.","logger":"task"}
