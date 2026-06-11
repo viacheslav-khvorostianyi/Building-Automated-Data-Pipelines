@@ -39,5 +39,9 @@ HW2/airflow/logs/
 HW2/airflow/simple_auth_manager_passwords.json.generated
 HW2/airflow/bootstrap/
 
+HW3/.env
+HW3/airflow/logs/
+HW3/airflow/dags/__pycache__/
+
 
 
