@@ -59,7 +59,7 @@ def create_weather_dag(city_name: str, lat: float, lon: float):
         dag_id=dag_id,
         schedule="@daily",
         start_date=pendulum.datetime(2026, 4, 1, tz="UTC"),
-        catchup=True,
+        catchup=False,
         tags=["weather", "hw3", "factory"],
         params={
             "wind_threshold": Param(
@@ -84,7 +84,6 @@ def create_weather_dag(city_name: str, lat: float, lon: float):
             "retry_exponential_backoff": True,
             "max_retry_delay":       timedelta(hours=1),
             "on_failure_callback":   on_failure_callback,
-            "sla":                   timedelta(hours=2),
         },
         render_template_as_native_obj=True,
     )
@@ -100,12 +99,12 @@ def create_weather_dag(city_name: str, lat: float, lon: float):
         # ── 1. EXTRACT – fetch from API, persist to raw_weather ───────────────
         @task(retries=3, retry_delay=timedelta(minutes=2),
               execution_timeout=timedelta(minutes=30))
-        def extract(logical_date: str, units: str = '') -> str:
+        def extract(exec_date: str, units: str = '') -> str:
             """
             Pull timemachine data from OpenWeatherMap.
-            If a row for (city, logical_date) already exists in raw_weather
+            If a row for (city, exec_date) already exists in raw_weather
             we skip the API call → idempotent resume.
-            Returns: logical_date string (used as XCom to downstream tasks).
+            Returns: exec_date string (used as XCom to downstream tasks).
             """
             ctx  = get_current_context()
             hook = pg()
@@ -113,11 +112,11 @@ def create_weather_dag(city_name: str, lat: float, lon: float):
             if hook.get_first(
                 "SELECT 1 FROM pipeline_data.raw_weather "
                 "WHERE city = %s AND logical_date = %s",
-                parameters=(city_name, logical_date),
+                parameters=(city_name, exec_date),
             ):
                 logging.info("raw_weather row already exists for %s %s – skipping fetch.",
-                             city_name, logical_date)
-                return logical_date
+                             city_name, exec_date)
+                return exec_date
 
             api_key = Variable.get("WEATHER_API_KEY")
             http    = HttpHook(method="GET", http_conn_id=HTTP_CONN_ID)
@@ -139,7 +138,7 @@ def create_weather_dag(city_name: str, lat: float, lon: float):
 
             if "data" not in raw or not raw["data"]:
                 raise ValueError(
-                    f"Unexpected API response for {city_name} {logical_date}: {list(raw.keys())}"
+                    f"Unexpected API response for {city_name} {exec_date}: {list(raw.keys())}"
                 )
 
             hook.run(
@@ -149,39 +148,39 @@ def create_weather_dag(city_name: str, lat: float, lon: float):
                 ON CONFLICT (city, logical_date) DO UPDATE
                     SET raw_json = EXCLUDED.raw_json, fetched_at = NOW()
                 """,
-                parameters=(city_name, logical_date, json.dumps(raw)),
+                parameters=(city_name, exec_date, json.dumps(raw)),
             )
-            logging.info("Stored raw_weather for %s %s.", city_name, logical_date)
-            return logical_date
+            logging.info("Stored raw_weather for %s %s.", city_name, exec_date)
+            return exec_date
 
         # ── 2. TRANSFORM – read raw, clean, persist to transformed_weather ────
         @task(execution_timeout=timedelta(minutes=30))
-        def transform(logical_date: str) -> str:
+        def transform(exec_date: str) -> str:
             """
             Read from raw_weather, produce a clean dict, store in
             transformed_weather.  Idempotent – skips if row already present.
-            Returns: logical_date (pass-through XCom).
+            Returns: exec_date (pass-through XCom).
             """
             hook = pg()
 
             if hook.get_first(
                 "SELECT 1 FROM pipeline_data.transformed_weather "
                 "WHERE city = %s AND logical_date = %s",
-                parameters=(city_name, logical_date),
+                parameters=(city_name, exec_date),
             ):
                 logging.info(
                     "transformed_weather row already exists for %s %s – skipping.",
-                    city_name, logical_date,
+                    city_name, exec_date,
                 )
-                return logical_date
+                return exec_date
 
             row = hook.get_first(
                 "SELECT raw_json FROM pipeline_data.raw_weather "
                 "WHERE city = %s AND logical_date = %s",
-                parameters=(city_name, logical_date),
+                parameters=(city_name, exec_date),
             )
             if not row:
-                raise ValueError(f"No raw_weather row found for {city_name} {logical_date}")
+                raise ValueError(f"No raw_weather row found for {city_name} {exec_date}")
 
             raw     = row[0]
             current = raw["data"][0]
@@ -190,7 +189,7 @@ def create_weather_dag(city_name: str, lat: float, lon: float):
                 "lat":          raw["lat"],
                 "lon":          raw["lon"],
                 "timezone":     raw["timezone"],
-                "logical_date": logical_date,
+                "logical_date": exec_date,
                 "temp_c":       current["temp"],
                 "feels_like_c": current["feels_like"],
                 "humidity":     current["humidity"],
@@ -209,27 +208,27 @@ def create_weather_dag(city_name: str, lat: float, lon: float):
                 ON CONFLICT (city, logical_date) DO UPDATE
                     SET data_json = EXCLUDED.data_json, created_at = NOW()
                 """,
-                parameters=(city_name, logical_date, json.dumps(clean)),
+                parameters=(city_name, exec_date, json.dumps(clean)),
             )
-            logging.info("Stored transformed_weather for %s %s.", city_name, logical_date)
-            return logical_date
+            logging.info("Stored transformed_weather for %s %s.", city_name, exec_date)
+            return exec_date
 
         # ── 3. DATA QUALITY CHECK ─────────────────────────────────────────────
         @task(execution_timeout=timedelta(minutes=10))
-        def quality_check(logical_date: str, min_temp: float = 0.0, max_temp: float = 0.0) -> str:
+        def quality_check(exec_date: str, min_temp: float = 0.0, max_temp: float = 0.0) -> str:
             """
             Validate transformed record against DAG params thresholds.
             Marks quality_passed = TRUE on success; raises on failure.
-            Returns: logical_date.
+            Returns: exec_date.
             """
             hook = pg()
             row  = hook.get_first(
                 "SELECT data_json FROM pipeline_data.transformed_weather "
                 "WHERE city = %s AND logical_date = %s",
-                parameters=(city_name, logical_date),
+                parameters=(city_name, exec_date),
             )
             if not row:
-                raise ValueError(f"No transformed row for {city_name} {logical_date}")
+                raise ValueError(f"No transformed row for {city_name} {exec_date}")
 
             data    = row[0]
             errors: list[str] = []
@@ -251,7 +250,7 @@ def create_weather_dag(city_name: str, lat: float, lon: float):
 
             if errors:
                 raise ValueError(
-                    f"Data quality FAILED for {city_name} {logical_date}: "
+                    f"Data quality FAILED for {city_name} {exec_date}: "
                     + "; ".join(errors)
                 )
 
@@ -259,14 +258,14 @@ def create_weather_dag(city_name: str, lat: float, lon: float):
                 "UPDATE pipeline_data.transformed_weather "
                 "SET quality_passed = TRUE "
                 "WHERE city = %s AND logical_date = %s",
-                parameters=(city_name, logical_date),
+                parameters=(city_name, exec_date),
             )
-            logging.info("Quality check PASSED for %s %s.", city_name, logical_date)
-            return logical_date
+            logging.info("Quality check PASSED for %s %s.", city_name, exec_date)
+            return exec_date
 
         # ── 4. BRANCH – wind speed check ──────────────────────────────────────
         @task.branch()
-        def branch_wind(logical_date: str, threshold: float = 10.0) -> str:
+        def branch_wind(exec_date: str, threshold: float = 10.0) -> str:
             """
             Read wind_speed from transformed_weather; route to alert_load
             when it exceeds {{ params.wind_threshold }}, else normal_load.
@@ -275,10 +274,10 @@ def create_weather_dag(city_name: str, lat: float, lon: float):
             row  = hook.get_first(
                 "SELECT data_json FROM pipeline_data.transformed_weather "
                 "WHERE city = %s AND logical_date = %s",
-                parameters=(city_name, logical_date),
+                parameters=(city_name, exec_date),
             )
             if not row:
-                raise ValueError(f"No transformed row for {city_name} {logical_date}")
+                raise ValueError(f"No transformed row for {city_name} {exec_date}")
             data  = row[0]
             wind  = data["wind_speed"]
             logging.info(
@@ -291,50 +290,50 @@ def create_weather_dag(city_name: str, lat: float, lon: float):
 
         # ── 5a. NORMAL LOAD ───────────────────────────────────────────────────
         @task(execution_timeout=timedelta(minutes=30))
-        def normal_load(logical_date: str) -> None:
+        def normal_load(exec_date: str) -> None:
             """Read from transformed_weather and upsert into weather (no alert)."""
-            _load_final(logical_date, alert=False)
+            _load_final(exec_date, alert=False)
 
         # ── 5b. ALERT + LOAD ──────────────────────────────────────────────────
         @task(trigger_rule=TriggerRule.NONE_FAILED_MIN_ONE_SUCCESS,
               execution_timeout=timedelta(minutes=30))
-        def alert_load(logical_date: str) -> None:
+        def alert_load(exec_date: str) -> None:
             """Log high-wind alert, then upsert into weather with alert=TRUE."""
             hook = pg()
             row  = hook.get_first(
                 "SELECT data_json FROM pipeline_data.transformed_weather "
                 "WHERE city = %s AND logical_date = %s",
-                parameters=(city_name, logical_date),
+                parameters=(city_name, exec_date),
             )
             if not row:
-                raise ValueError(f"No transformed row for {city_name} {logical_date}")
+                raise ValueError(f"No transformed row for {city_name} {exec_date}")
             data = row[0]
             logging.warning(
                 "HIGH WIND ALERT | city=%s | wind=%.1f m/s | date=%s",
-                city_name, data["wind_speed"], logical_date,
+                city_name, data["wind_speed"], exec_date,
             )
-            _load_final(logical_date, alert=True)
+            _load_final(exec_date, alert=True)
 
-        def _load_final(logical_date: str, *, alert: bool) -> None:
+        def _load_final(exec_date: str, *, alert: bool) -> None:
             hook     = pg()
             existing = hook.get_first(
                 "SELECT alert FROM pipeline_data.weather WHERE city = %s AND logical_date = %s",
-                parameters=(city_name, logical_date),
+                parameters=(city_name, exec_date),
             )
             if existing and bool(existing[0]) == alert:
                 logging.info(
                     "weather row already loaded for %s %s (alert=%s) - skipping.",
-                    city_name, logical_date, alert,
+                    city_name, exec_date, alert,
                 )
                 return
 
             row = hook.get_first(
                 "SELECT data_json FROM pipeline_data.transformed_weather "
                 "WHERE city = %s AND logical_date = %s",
-                parameters=(city_name, logical_date),
+                parameters=(city_name, exec_date),
             )
             if not row:
-                raise ValueError(f"No transformed row for {city_name} {logical_date}")
+                raise ValueError(f"No transformed row for {city_name} {exec_date}")
             d = row[0]
             hook.run(
                 """
@@ -363,11 +362,11 @@ def create_weather_dag(city_name: str, lat: float, lon: float):
                 ),
             )
             logging.info("Loaded weather row for %s %s (alert=%s).",
-                         city_name, logical_date, alert)
+                         city_name, exec_date, alert)
 
         # ── Wire up ───────────────────────────────────────────────────────────
         ensure_tables_task = ensure_tables()
-        raw_ld             = extract(logical_date="{{ ds }}", units="{{ params.units }}")
+        raw_ld             = extract(exec_date="{{ ds }}", units="{{ params.units }}")
         transformed_ld     = transform(raw_ld)
         quality_ld         = quality_check(
             transformed_ld,

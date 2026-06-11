@@ -42,6 +42,22 @@ HW2/airflow/bootstrap/
 HW3/.env
 HW3/airflow/logs/
 HW3/airflow/dags/__pycache__/
+HW3/airflow/dags/*.pyc
+HW3/airflow/dags/*.pyo
+HW3/airflow/dags/*.env
+HW3/airflow/dags/*.env.local
+HW3/airflow/dags/*.env.*.local
+HW3/airflow/dags/*.env.example
+HW3/common/.env
+HW3/common/__pycache__/
+HW3/common/*.pyc
+HW3/common/*.pyo
+HW3/common/*.env
+HW3/common/*.env.local
+HW3/common/*.env.*.local
+HW3/common/*.env.example
+HW3/config/*
+HW3/plugins/*
 
 
 

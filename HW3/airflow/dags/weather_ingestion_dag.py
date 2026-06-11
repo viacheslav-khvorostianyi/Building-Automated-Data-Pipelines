@@ -31,8 +31,9 @@ CITY = "Kyiv"
     dag_id="weather_ingestion_dag",
     schedule="@daily",
     start_date=pendulum.datetime(2026, 4, 1, tz="UTC"),
-    catchup=True,
+    catchup=False,
     tags=["weather", "hw3", "kyiv", "ingestion"],
+    render_template_as_native_obj=True,
     params={
         "lat":   Param(50.4501, type="number", description="Latitude of Kyiv"),
         "lon":   Param(30.5234, type="number", description="Longitude of Kyiv"),
@@ -48,7 +49,6 @@ CITY = "Kyiv"
         "retry_exponential_backoff": True,
         "max_retry_delay":           timedelta(hours=1),
         "on_failure_callback":       on_failure_callback,
-        "sla":                       timedelta(hours=2),
     },
 )
 def weather_ingestion_dag():
@@ -59,7 +59,7 @@ def weather_ingestion_dag():
 
     @task(retries=3, retry_delay=timedelta(minutes=2), execution_timeout=timedelta(minutes=30))
     def fetch_and_store_raw(
-        logical_date: str,
+        exec_date: str,
         lat: float = 0.0,
         lon: float = 0.0,
         units: str = "metric",
@@ -68,17 +68,17 @@ def weather_ingestion_dag():
         Fetch from OpenWeatherMap using Jinja-resolved params:
           {{ params.lat }}, {{ params.lon }}, {{ params.units }}, {{ ds }}
         Idempotent: skips API call if row already in raw_weather.
-        Returns logical_date for XCom.
+        Returns exec_date for XCom.
         """
         ctx  = get_current_context()
         hook = pg()
 
         if hook.get_first(
             "SELECT 1 FROM pipeline_data.raw_weather WHERE city=%s AND logical_date=%s",
-            parameters=(CITY, logical_date),
+            parameters=(CITY, exec_date),
         ):
-            logging.info("raw_weather already present for %s %s - skipping.", CITY, logical_date)
-            return logical_date
+            logging.info("raw_weather already present for %s %s - skipping.", CITY, exec_date)
+            return exec_date
 
         api_key = Variable.get("WEATHER_API_KEY")
         http    = HttpHook(method="GET", http_conn_id=HTTP_CONN_ID)
@@ -100,7 +100,7 @@ def weather_ingestion_dag():
 
         if "data" not in raw or not raw["data"]:
             raise ValueError(
-                f"Unexpected API response for {CITY} {logical_date}: {list(raw.keys())}"
+                f"Unexpected API response for {CITY} {exec_date}: {list(raw.keys())}"
             )
 
         hook.run(
@@ -110,13 +110,13 @@ def weather_ingestion_dag():
             ON CONFLICT (city, logical_date) DO UPDATE
                 SET raw_json = EXCLUDED.raw_json, fetched_at = NOW()
             """,
-            parameters=(CITY, logical_date, json.dumps(raw)),
+            parameters=(CITY, exec_date, json.dumps(raw)),
         )
-        logging.info("Stored raw_weather for %s %s.", CITY, logical_date)
-        return logical_date
+        logging.info("Stored raw_weather for %s %s.", CITY, exec_date)
+        return exec_date
 
     ensure_raw_table() >> fetch_and_store_raw(
-        logical_date="{{ ds }}",
+        exec_date="{{ ds }}",
         lat="{{ params.lat }}",
         lon="{{ params.lon }}",
         units="{{ params.units }}",
